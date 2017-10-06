@@ -1,0 +1,76 @@
+#!/bin/sh
+
+###########
+# CRONJOB #
+###########
+
+BTRFS_CMD=/bin/btrfs
+DEST=".snapshot"
+HOURLY_COPY=0
+DAILY_COPY=6
+WEEKLY_COPY=3
+MONTHLY_COPY=2
+
+DEBUG=0
+
+SELF=`realpath $0`
+if [ "$1" = "install" ]; then
+    echo "################"
+    echo "# Install mode #"
+    echo "################"
+    CRON=(/etc/cron.hourly/ /etc/cron.daily/ /etc/cron.weekly/ /etc/cron.monthly/)
+    for i in ${CRON[@]}; do
+        CLI="cp -iv $SELF $i"
+        $CLI
+    done
+    for i in $(findmnt -lnt btrfs | awk '{print $1}'); do
+        DIR=`realpath ${i}/${DEST}`
+        if [ -d "$DIR" ] ; then
+           echo "$DIR exist, ignore"
+        else
+           read -p "Create $DIR ? [y|N]" ANS
+           case $ANS in
+               [yY])
+                   mkdir -v $DIR
+                   ;;
+               *)
+                   echo "skip $DIR"
+                   ;;
+           esac
+        fi
+    done
+    exit 0
+fi
+
+[ -x $BTRFS_CMD ] || exit 0
+
+_DIR=`dirname $SELF`
+TAG=${_DIR##*/cron.}
+COPY=0
+case $TAG in
+    hourly) [ $COPY -gt 0 ] || COPY=$HOURLY_COPY ;;
+    daily) [ $COPY -gt 0 ] || COPY=$DAILY_COPY ;;
+    weekly) [ $COPY -gt 0 ] || COPY=$WEEK_COPY ;;
+    monthly) [ $COPY -gt 0 ] || COPY=$MONTHLY_COPY ;;
+    *) exit 0 ;;
+esac
+
+for i in $(findmnt -lnt btrfs | awk '{print $1}'); do
+    DIR=`realpath ${i}/${DEST}`
+    [ -d "$DIR" ] || continue
+
+    # cleaning
+    for j in $(find ${DIR} -maxdepth 1 -mindepth 1 -type d -regex .*@${TAG}$ | sort | head -n -${COPY}); do
+        CLI="$BTRFS_CMD subvolume delete $j"
+        [ "$DEBUG" -eq 0 ] || echo $CLI
+        $CLI >/dev/null
+    done
+
+    # make snapshot
+    SNAPSHOT=$(date "+%FT%H_%M_%S@${TAG}")
+    CLI="$BTRFS_CMD subvolume snapshot -r $i $DIR/$SNAPSHOT"
+    if [ $COPY -gt 0 ]; then
+        [ "$DEBUG" -eq 0 ] || echo $CLI
+        $CLI >/dev/null
+    fi
+done
